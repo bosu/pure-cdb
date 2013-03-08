@@ -1,0 +1,7 @@
+pure-cdb is another (first being hs-cdb) Haskell library to read and write CDB files.
+
+For more information on the CDB file format, please consult:
+http://cr.yp.to/cdb.html
+
+For more documentation please see:
+http://hackage.haskell.org/package/pure-cdb
