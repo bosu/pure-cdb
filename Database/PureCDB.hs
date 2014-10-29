@@ -29,8 +29,9 @@
 -- > getIt :: IO [ByteString]
 -- > getIt = do
 -- >       f <- openCDB "foo.cdb"
--- >       getBS f (B.pack "foo")
+-- >       bs <- getBS f (B.pack "foo")
 -- >       closeCDB "foo.cdb"
+-- >       return bs
 -- >
 --
 -- @getIt@ returns [ \"bar\", \"baz\" ] in unspecified order.
