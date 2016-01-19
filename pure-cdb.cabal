@@ -30,6 +30,10 @@ Extra-Source-Files:
     t/foo.cdb
     README
 
+Source-Repository head
+    Type: git
+    Location: https://github.com/bosu/pure-cdb
+
 Library
     GHC-Options: -Wall
     Build-Depends: base (< 5), vector, binary, bytestring, containers, mtl, directory
