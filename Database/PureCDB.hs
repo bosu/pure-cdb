@@ -67,10 +67,13 @@ data WriteState = WriteState { wsHandle :: Handle, wsTOC :: !(V.Vector HashState
 newtype WriteCDB m a = WriteCDB (StateT WriteState m a)
                             deriving (Functor, Monad, Applicative, MonadTrans, MonadIO)
 
+-- | Read a list of Word32 pairs from the beginning of the handle.
+-- The second argument is the number of pairs.
 readWordPairs :: Handle -> Int -> IO [(Word32, Word32)]
-readWordPairs ioh sz = do
-    bs <- BL.hGet ioh sz
-    return $ runGet (mapM (const go) [ 1 .. sz `div` 8 ]) bs
+readWordPairs ioh numberOfPairs = do
+    -- read enough bytes from the handle
+    bs <- BL.hGet ioh (numberOfPairs * 8)
+    return $ runGet (mapM (const go) [ 1 .. numberOfPairs ]) bs
     where go = (,) <$> getWord32le <*> getWord32le
 
 -- | Opens CDB database.
@@ -78,7 +81,7 @@ openCDB :: FilePath -> IO ReadCDB
 openCDB fp = do
     ioh <- openBinaryFile fp ReadMode
     hSetBuffering ioh NoBuffering
-    wps <- readWordPairs ioh 2048
+    wps <- readWordPairs ioh 256
     let v = V.fromList $ map (uncurry TOCHash) wps
     return $ ReadCDB ioh v
 
@@ -89,7 +92,7 @@ closeCDB (ReadCDB ioh _) = hClose ioh
 getRecord :: Handle -> Word32 -> IO (B.ByteString, B.ByteString)
 getRecord ioh sk = do
     hSeek ioh AbsoluteSeek (fromIntegral sk)
-    [(ksz, vsz)] <- readWordPairs ioh 8
+    [(ksz, vsz)] <- readWordPairs ioh 1
     k <- B.hGet ioh $ fromIntegral ksz
     v <- B.hGet ioh $ fromIntegral vsz
     return (k, v)
@@ -98,7 +101,7 @@ getRecord ioh sk = do
 getBS :: ReadCDB -> B.ByteString -> IO [B.ByteString]
 getBS r@(ReadCDB ioh _) bs = do
     hSeek ioh AbsoluteSeek (fromIntegral $ hpos + slot * 8)
-    wps <- readWordPairs ioh (fromIntegral $ (hlen - slot) * 8)
+    wps <- readWordPairs ioh (fromIntegral $ hlen - slot)
     let pairs = filter ((== h) . fst) $ takeWhile ((/= 0) . snd) wps
     kvs <- mapM (getRecord ioh . snd) pairs
     return $ map snd $ filter ((bs ==) . fst) kvs
