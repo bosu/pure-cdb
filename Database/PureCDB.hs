@@ -81,7 +81,7 @@ openCDB :: FilePath -> IO ReadCDB
 openCDB fp = do
     ioh <- openBinaryFile fp ReadMode
     hSetBuffering ioh NoBuffering
-    wps <- readWordPairs ioh 256
+    wps <- readWordPairs ioh tOC_ENTRY_NUMBER
     let v = V.fromList $ map (uncurry TOCHash) wps
     return $ ReadCDB ioh v
 
@@ -148,8 +148,12 @@ writeOneHash ioh (HashState cnt pairs) = do
 makeCDB :: MonadIO m => WriteCDB m a -> FilePath -> m a
 makeCDB (WriteCDB m) fp = do
     ioh <- liftIO $ openBinaryFile (fp ++ ".tmp") WriteMode
-    liftIO $ hSeek ioh AbsoluteSeek 2048
-    (res, st) <- runStateT m $ WriteState ioh $ V.replicate 256 (HashState 0 [])
+    let endOfTOC = tOC_ENTRY_NUMBER * 8
+    -- seek to the end of the table of contents
+    liftIO $ hSeek ioh AbsoluteSeek endOfTOC
+    -- and run the write actions on that (which modify the handle)
+    (res, st) <- runStateT m
+      $ WriteState ioh $ V.replicate tOC_ENTRY_NUMBER (HashState 0 [])
     tocs <- liftIO $ mapM (writeOneHash ioh) $ V.toList $ wsTOC st
     liftIO $ hSeek ioh AbsoluteSeek 0
     liftIO $ writePairs ioh tocs

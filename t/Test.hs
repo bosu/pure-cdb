@@ -15,7 +15,7 @@ main = withTemporaryDirectory "/tmp/pure_cdb_XXXXXXX" $ \td -> testSimpleMain $ 
     plan 13
     r <- liftIO $ openCDB "t/foo.cdb"
     is (V.findIndex ((> 0) . hLength) $ rTOC r) (Just 163)
-    is ((cdbHash foo) `mod` 256) 163
+    is ((cdbHash foo) `mod` tOC_ENTRY_NUMBER) 163
     is (hPosition $ fst $ tocFind r foo) (hPosition $ rTOC r V.! 163)
 
     v <- liftIO $ getBS r foo
