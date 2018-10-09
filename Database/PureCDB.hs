@@ -138,10 +138,17 @@ addBS key val = WriteCDB $ do
     liftIO $ BL.hPut (wsHandle st) buf
     put $ st { wsTOC = updateTOC (wsTOC st) key (fromIntegral cur) }
     where buf = runPut $ do
-                putWord32le $ fromIntegral $ B.length key
-                putWord32le $ fromIntegral $ B.length val
+                putWord32le $ keyLen
+                putWord32le $ valLen
                 putByteString key
                 putByteString val
+          keyLen = toWord32Check "key" (B.length key)
+          valLen = toWord32Check "val" (B.length val)
+          toWord32Check :: [Char] -> Int -> Word32
+          toWord32Check valName i =
+            if i > fromIntegral (maxBound :: Word32)
+            then error ("addBS: " ++ valName ++ " is too long (overflows Word32!)")
+            else fromIntegral i
 
 writePairs :: Handle -> [(Word32, Word32)] -> IO ()
 writePairs ioh pairs = BL.hPut ioh buf where
