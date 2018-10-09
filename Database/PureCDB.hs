@@ -42,9 +42,9 @@
 module Database.PureCDB (
     -- * Writing interface
     WriteCDB, makeCDB, addBS
-    
     -- * Reading interface
-    , ReadCDB, openCDB, closeCDB, getBS) where
+    , ReadCDB, openCDB, closeCDB, withCDB, getBS
+) where
 
 import Data.Word
 import System.IO
@@ -54,6 +54,7 @@ import Data.Binary.Get
 import Data.Binary.Put
 import qualified Data.Vector as V
 import qualified Data.Vector.Generic.Mutable as MV
+import Control.Exception (bracket)
 import Control.Monad.State
 import System.Directory
 import Control.Monad.ST
@@ -94,6 +95,10 @@ openCDB fp = do
 -- | Closes the database.
 closeCDB :: ReadCDB -> IO ()
 closeCDB (ReadCDB ioh _) = hClose ioh
+
+-- | Bracket helper. Database is only open inside the lambda.
+withCDB :: FilePath -> (ReadCDB -> IO a) -> IO a
+withCDB fp = bracket (openCDB fp) closeCDB
 
 getRecord :: Handle -> Word32 -> IO (B.ByteString, B.ByteString)
 getRecord ioh sk = do
