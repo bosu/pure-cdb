@@ -15,7 +15,7 @@
 --     <http://cr.yp.to/cdb.html>
 --
 -- Here's how you make new CDB file:
---  
+--
 -- > import qualified Data.ByteString.Char8 as B
 -- > import Database.PureCDB
 -- >
@@ -54,18 +54,24 @@ import Data.Binary.Get
 import Data.Binary.Put
 import qualified Data.Vector as V
 import qualified Data.Vector.Generic.Mutable as MV
-import Control.Applicative
 import Control.Monad.State
 import System.Directory
 import Control.Monad.ST
 import Database.PureCDB.Internal
 
-data HashState = HashState { hsCount :: !Word32, hsPairs :: ![(Word32, Word32)] }
-data WriteState = WriteState { wsHandle :: Handle, wsTOC :: !(V.Vector HashState) }
+-- | 
+data HashState = HashState
+    { hsCount :: !Word32
+    , hsPairs :: ![(Word32, Word32)] }
+
+-- | Mutable bits, the underlying handle and the table of contents.
+data WriteState = WriteState
+    { wsHandle :: Handle
+    , wsTOC :: !(V.Vector HashState) }
 
 -- | Write context monad transformer.
 newtype WriteCDB m a = WriteCDB (StateT WriteState m a)
-                            deriving (Functor, Monad, Applicative, MonadTrans, MonadIO)
+    deriving (Functor, Monad, Applicative, MonadTrans, MonadIO)
 
 -- | Read a list of Word32 pairs from the beginning of the handle.
 -- The second argument is the number of pairs.
@@ -100,13 +106,13 @@ getRecord ioh sk = do
 -- | Fetches key from the database.
 getBS :: ReadCDB -> B.ByteString -> IO [B.ByteString]
 getBS r@(ReadCDB ioh _) bs = do
+    let (TOCHash hpos hlen, h) = tocFind r bs
+        slot = hashSlot h hlen
     hSeek ioh AbsoluteSeek (fromIntegral $ hpos + slot * 8)
     wps <- readWordPairs ioh (fromIntegral $ hlen - slot)
     let pairs = filter ((== h) . fst) $ takeWhile ((/= 0) . snd) wps
     kvs <- mapM (getRecord ioh . snd) pairs
     return $ map snd $ filter ((bs ==) . fst) kvs
-    where (TOCHash hpos hlen, h) = tocFind r bs
-          slot = hashSlot h hlen
 
 updateTOC :: V.Vector HashState -> B.ByteString -> Word32 -> V.Vector HashState
 updateTOC vec key cur = runST $ do
