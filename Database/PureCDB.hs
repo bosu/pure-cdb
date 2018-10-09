@@ -15,7 +15,7 @@
 --     <http://cr.yp.to/cdb.html>
 --
 -- Here's how you make new CDB file:
---  
+--
 -- > import qualified Data.ByteString.Char8 as B
 -- > import Database.PureCDB
 -- >
@@ -42,9 +42,9 @@
 module Database.PureCDB (
     -- * Writing interface
     WriteCDB, makeCDB, addBS
-    
     -- * Reading interface
-    , ReadCDB, openCDB, closeCDB, getBS) where
+    , ReadCDB, openCDB, closeCDB, withCDB, getBS
+) where
 
 import Data.Word
 import System.IO
@@ -54,23 +54,33 @@ import Data.Binary.Get
 import Data.Binary.Put
 import qualified Data.Vector as V
 import qualified Data.Vector.Generic.Mutable as MV
-import Control.Applicative
+import Control.Exception (bracket)
 import Control.Monad.State
 import System.Directory
 import Control.Monad.ST
 import Database.PureCDB.Internal
 
-data HashState = HashState { hsCount :: !Word32, hsPairs :: ![(Word32, Word32)] }
-data WriteState = WriteState { wsHandle :: Handle, wsTOC :: !(V.Vector HashState) }
+-- | 
+data HashState = HashState
+    { hsCount :: !Word32
+    , hsPairs :: ![(Word32, Word32)] }
+
+-- | Mutable bits, the underlying handle and the table of contents.
+data WriteState = WriteState
+    { wsHandle :: Handle
+    , wsTOC :: !(V.Vector HashState) }
 
 -- | Write context monad transformer.
 newtype WriteCDB m a = WriteCDB (StateT WriteState m a)
-                            deriving (Functor, Monad, Applicative, MonadTrans, MonadIO)
+    deriving (Functor, Monad, Applicative, MonadTrans, MonadIO)
 
+-- | Read a list of Word32 pairs from the beginning of the handle.
+-- The second argument is the number of pairs.
 readWordPairs :: Handle -> Int -> IO [(Word32, Word32)]
-readWordPairs ioh sz = do
-    bs <- BL.hGet ioh sz
-    return $ runGet (mapM (const go) [ 1 .. sz `div` 8 ]) bs
+readWordPairs ioh numberOfPairs = do
+    -- read enough bytes from the handle
+    bs <- BL.hGet ioh (numberOfPairs * 8)
+    return $ runGet (mapM (const go) [ 1 .. numberOfPairs ]) bs
     where go = (,) <$> getWord32le <*> getWord32le
 
 -- | Opens CDB database.
@@ -78,7 +88,7 @@ openCDB :: FilePath -> IO ReadCDB
 openCDB fp = do
     ioh <- openBinaryFile fp ReadMode
     hSetBuffering ioh NoBuffering
-    wps <- readWordPairs ioh 2048
+    wps <- readWordPairs ioh tOC_ENTRY_NUMBER
     let v = V.fromList $ map (uncurry TOCHash) wps
     return $ ReadCDB ioh v
 
@@ -86,10 +96,14 @@ openCDB fp = do
 closeCDB :: ReadCDB -> IO ()
 closeCDB (ReadCDB ioh _) = hClose ioh
 
+-- | Bracket helper. Database is only open inside the lambda.
+withCDB :: FilePath -> (ReadCDB -> IO a) -> IO a
+withCDB fp = bracket (openCDB fp) closeCDB
+
 getRecord :: Handle -> Word32 -> IO (B.ByteString, B.ByteString)
 getRecord ioh sk = do
     hSeek ioh AbsoluteSeek (fromIntegral sk)
-    [(ksz, vsz)] <- readWordPairs ioh 8
+    [(ksz, vsz)] <- readWordPairs ioh 1
     k <- B.hGet ioh $ fromIntegral ksz
     v <- B.hGet ioh $ fromIntegral vsz
     return (k, v)
@@ -97,13 +111,13 @@ getRecord ioh sk = do
 -- | Fetches key from the database.
 getBS :: ReadCDB -> B.ByteString -> IO [B.ByteString]
 getBS r@(ReadCDB ioh _) bs = do
+    let (TOCHash hpos hlen, h) = tocFind r bs
+        slot = hashSlot h hlen
     hSeek ioh AbsoluteSeek (fromIntegral $ hpos + slot * 8)
-    wps <- readWordPairs ioh (fromIntegral $ (hlen - slot) * 8)
+    wps <- readWordPairs ioh (fromIntegral $ hlen - slot)
     let pairs = filter ((== h) . fst) $ takeWhile ((/= 0) . snd) wps
     kvs <- mapM (getRecord ioh . snd) pairs
     return $ map snd $ filter ((bs ==) . fst) kvs
-    where (TOCHash hpos hlen, h) = tocFind r bs
-          slot = hashSlot h hlen
 
 updateTOC :: V.Vector HashState -> B.ByteString -> Word32 -> V.Vector HashState
 updateTOC vec key cur = runST $ do
@@ -124,10 +138,17 @@ addBS key val = WriteCDB $ do
     liftIO $ BL.hPut (wsHandle st) buf
     put $ st { wsTOC = updateTOC (wsTOC st) key (fromIntegral cur) }
     where buf = runPut $ do
-                putWord32le $ fromIntegral $ B.length key
-                putWord32le $ fromIntegral $ B.length val
+                putWord32le $ keyLen
+                putWord32le $ valLen
                 putByteString key
                 putByteString val
+          keyLen = toWord32Check "key" (B.length key)
+          valLen = toWord32Check "val" (B.length val)
+          toWord32Check :: [Char] -> Int -> Word32
+          toWord32Check valName i =
+            if i > fromIntegral (maxBound :: Word32)
+            then error ("addBS: " ++ valName ++ " is too long (overflows Word32!)")
+            else fromIntegral i
 
 writePairs :: Handle -> [(Word32, Word32)] -> IO ()
 writePairs ioh pairs = BL.hPut ioh buf where
@@ -145,8 +166,12 @@ writeOneHash ioh (HashState cnt pairs) = do
 makeCDB :: MonadIO m => WriteCDB m a -> FilePath -> m a
 makeCDB (WriteCDB m) fp = do
     ioh <- liftIO $ openBinaryFile (fp ++ ".tmp") WriteMode
-    liftIO $ hSeek ioh AbsoluteSeek 2048
-    (res, st) <- runStateT m $ WriteState ioh $ V.replicate 256 (HashState 0 [])
+    let endOfTOC = tOC_ENTRY_NUMBER * 8
+    -- seek to the end of the table of contents
+    liftIO $ hSeek ioh AbsoluteSeek endOfTOC
+    -- and run the write actions on that (which modify the handle)
+    (res, st) <- runStateT m
+      $ WriteState ioh $ V.replicate tOC_ENTRY_NUMBER (HashState 0 [])
     tocs <- liftIO $ mapM (writeOneHash ioh) $ V.toList $ wsTOC st
     liftIO $ hSeek ioh AbsoluteSeek 0
     liftIO $ writePairs ioh tocs
